@@ -1,6 +1,11 @@
 /**
  * MiniMax API - 简历优化对话系统
- * 支持连续对话、追问、全局上下文
+ * 模型: minimax-m2.7 (支持推理思考 + 正常回复)
+ * 端点: /v1/text/chatcompletion_v2
+ *
+ * minimax-m2.7 返回格式:
+ *   - message.content         → AI 正式回复
+ *   - message.reasoning_content → 模型思考过程（推理链）
  */
 
 import { mockAnalysisResult } from '@/lib/mockData';
@@ -8,36 +13,98 @@ import { mockAnalysisResult } from '@/lib/mockData';
 const MINIMAX_API_KEY = 'sk-cp-WEOlm-bdy3xk3fauyBAkpPAcmc9RBUd7ZjizdjF2gRrjNPG3eBR6KaEohQp3NFZPqu9VV5ij6kMva8_cWG6jNVYgMopzfqeyH_pgvrx79vHgsW9SYVnHoLw';
 const MINIMAX_API_URL = 'https://api.minimax.chat/v1/text/chatcompletion_v2';
 
-// 全局对话历史（分析场景内共享）
-let chatHistory = [];
+// 对话历史（维护完整上下文）
+let chatMessages = [];
 
 /**
- * 完整的简历分析 Prompt（包含所有 Skills 上下文）
+ * 调用 MiniMax API（minimax-m2.7）
+ * @param {string} systemPrompt - 系统提示
+ * @param {string} userPrompt - 用户输入
+ * @returns {Promise<{content: string, reasoning: string}>}
  */
-function buildAnalysisPrompt(resumeText, jdText) {
+async function callMiniMax(systemPrompt, userPrompt) {
+  const startTime = Date.now();
+
+  const response = await fetch(MINIMAX_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${MINIMAX_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'minimax-m2.7',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...chatMessages, // 携带对话历史
+        { role: 'user', content: userPrompt },
+      ],
+      temperature: 0.3,
+      max_tokens: 3000,
+    }),
+  });
+
+  const latency = Date.now() - startTime;
+  console.log('[MiniMax API] 响应时间:', latency + 'ms');
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('[MiniMax API] HTTP 错误:', response.status, errorText);
+    throw new Error(`API 调用失败 (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json();
+  console.log('[MiniMax API] 原始响应 keys:', Object.keys(data));
+
+  // 解析响应
+  const choice = data.choices?.[0];
+  if (!choice) {
+    console.error('[MiniMax API] choices 为空:', JSON.stringify(data).slice(0, 300));
+    throw new Error('API 返回数据异常: choices 为空');
+  }
+
+  const message = choice.message || {};
+  const content = message.content || '';
+  const reasoning = message.reasoning_content || '';
+
+  console.log('[MiniMax API] 解析结果:');
+  console.log('  - content 长度:', content.length, '字');
+  console.log('  - reasoning 长度:', reasoning.length, '字');
+  console.log('  - finish_reason:', choice.finish_reason);
+  console.log('  - content 前100字:', content.slice(0, 100));
+
+  if (!content.trim() && !reasoning.trim()) {
+    throw new Error('AI 回复为空，可能原因：(1) Token 不足 (2) 模型服务暂时不可用 (3) 内容触发安全审核');
+  }
+
+  return { content, reasoning };
+}
+
+/**
+ * 构建分析系统提示
+ */
+function buildAnalysisSystem() {
   return `你是一位资深AI产品经理兼求职顾问，专精于简历优化与职位匹配分析。
 
-## 评估维度（权重）
-- 工作经验（30%）：年限、行业、职责匹配度
-- 技能要求（30%）：硬技能覆盖度
-- 项目经历（25%）：项目复杂度、成果相关性
-- 软性要求（15%）：沟通、团队、管理能力
+## 核心能力
+1. 精准提取 JD 核心要求（3-5条）
+2. 深度匹配简历与 JD 的各项要求
+3. 给出具体、可操作的改写建议（不是泛泛而谈）
+4. 量化成果表述优化
+
+## 评分维度（权重）
+- 工作经验（30%）
+- 技能要求（30%）
+- 项目经历（25%）
+- 软性要求（15%）
 
 ## 评分标准
-- 90-100：核心要求完全匹配，可直接投递
-- 75-89：大部分匹配，需小幅调整简历
-- 60-74：部分匹配，需要针对性改写关键经历
-- 40-59：差距较大，建议补充相关经历
+- 90-100：完全匹配，可直接投递
+- 75-89：大部分匹配，需小幅调整
+- 60-74：部分匹配，需针对性改写
+- 40-59：差距较大，建议补充经历
 - <40：不建议投递
 
-## 分析要求
-请逐步分析（先列出思考过程，再给出结论）：
-1. JD 的核心要求提取（3-5条）
-2. 简历与每条要求的匹配度分析
-3. 缺失项优先级排序
-4. 简历改写建议（含具体话术）
-
-## 输出格式（严格 JSON）
+## 输出格式（必须严格 JSON）
 {
   "overall_score": 数字,
   "dimension_scores": {
@@ -47,68 +114,98 @@ function buildAnalysisPrompt(resumeText, jdText) {
     "soft_skills": {"score": 数字, "analysis": "分析"}
   },
   "matched_items": [{"requirement": "要求", "evidence": "简历证据", "strength": "强/中/弱"}],
-  "missing_items": [{"requirement": "要求", "priority": "高/中/低", "suggestion": "建议"}],
+  "missing_items": [{"requirement": "要求", "priority": "高/中/低", "suggestion": "具体建议"}],
   "rewritten_sections": [{"section": "部分", "original": "原文", "improved": "改写", "reason": "原因"}],
   "application_strategy": "策略建议"
 }
 
-## 简历内容
-${resumeText}
-
-## 岗位JD
-${jdText}`;
+注意：
+- 必须输出合法 JSON，不要输出任何 JSON 之外的内容
+- 如果分析失败，返回带有 error 字段的 JSON
+- 思考过程放在 reasoning_content 字段，不需要在 content 中重复`;
 }
 
 /**
- * 追问/对话 Prompt（含分析结果上下文 + Skills）
+ * 构建对话系统提示
  */
-function buildChatPrompt(userQuestion, resumeText, jdText, analysisResult) {
-  const previousAnalysis = JSON.stringify(analysisResult, null, 2);
-
+function buildChatSystem() {
   return `你是一位资深AI产品经理兼求职顾问，正在帮助用户优化简历。
 
-## 当前分析结果（已完成）
-${previousAnalysis}
+## 你的角色
+- 深度理解用户的问题和简历内容
+- 给出具体、可操作的回答，不说废话
+- 每次回答都要引用简历原文或 JD 原文作为证据
+- 如果用户问改写，给出可以直接用的简历话术
 
-## 用户原始简历
+## 回答风格
+- 回答有深度，体现专业经验
+- 先理解用户具体问的是哪个部分
+- 结合简历原文和 JD 要求，给出针对性建议
+- 如果用户的问题超出了简历和 JD 范围，可以适当拓展但不要跑题
+
+## 重要原则
+- 不要说"建议加强XX能力"这种废话，要说具体怎么做
+- 如果某个问题无法基于现有材料回答，直接说明
+- 每次回答末尾可以附上具体的简历改写建议（如果适用）`;
+}
+
+/**
+ * 分析简历与 JD 匹配度
+ */
+export async function analyzeResume({ resumeText, jdText }) {
+  // 重置对话历史
+  chatMessages = [];
+
+  console.log('[AI Resume] 开始分析...');
+  console.log('[AI Resume] 简历长度:', resumeText.length, '字');
+  console.log('[AI Resume] JD 长度:', jdText.length, '字');
+
+  const userPrompt = `## 简历内容
 ${resumeText}
 
 ## 岗位 JD
 ${jdText}
 
-## 用户追问
-"${userQuestion}"
-
-## 回答要求
-1. 先理解用户具体问的是哪个部分（匹配项/缺失项/改写建议/策略）
-2. 结合简历原文和 JD 要求，给出具体、可操作的建议
-3. 如果用户问改写，给出具体话术而非泛泛而谈
-4. 每次回答都要引用具体证据（简历原文或 JD 原文）
-5. 格式：先用 Markdown 给出结构化回答，然后附上对应的简历改写建议（如果有）
-
-注意：回答要有深度，体现专业经验，不要只说"建议加强"这种废话。`;
-}
-
-/**
- * 分析简历与 JD 匹配度（主分析）
- */
-export async function analyzeResume({ resumeText, jdText }) {
-  // 重置对话历史
-  chatHistory = [
-    { role: 'user', content: buildAnalysisPrompt(resumeText, jdText) }
-  ];
-
-  console.log('[AI Resume] 开始调用 MiniMax API...');
-  console.log('[AI Resume] 模型: MiniMax-Text-01');
-  console.log('[AI Resume] 简历长度:', resumeText.length, '字');
-  console.log('[AI Resume] JD长度:', jdText.length, '字');
+请严格按上述 JSON 格式输出分析结果。`;
 
   try {
-    const result = await callMiniMaxAPI(buildAnalysisPrompt(resumeText, jdText), resumeText, jdText);
-    console.log('[AI Resume] API 返回结果:', JSON.stringify(result, null, 2));
+    const { content, reasoning } = await callMiniMax(buildAnalysisSystem(), userPrompt);
+
+    console.log('[AI Resume] API 调用成功，尝试解析 JSON...');
+
+    // 尝试从 content 中提取 JSON
+    let result = null;
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        result = JSON.parse(jsonMatch[0]);
+        console.log('[AI Resume] JSON 解析成功, score:', result.overall_score);
+      } catch (e) {
+        console.warn('[AI Resume] JSON 解析失败:', e.message);
+      }
+    }
+
+    if (!result) {
+      // JSON 解析失败，使用 mock + 原始回复
+      result = {
+        ...mockAnalysisResult,
+        raw_ai_response: content,
+        reasoning_content: reasoning,
+        overall_score: 75,
+        parse_error: true,
+      };
+      console.log('[AI Resume] 使用 fallback 数据');
+    }
+
+    // 初始化对话历史（加入分析消息）
+    chatMessages = [
+      { role: 'user', content: userPrompt },
+      { role: 'assistant', content },
+    ];
+
     return result;
   } catch (err) {
-    console.error('[AI Resume] API 调用失败:', err);
+    console.error('[AI Resume] 分析失败:', err.message);
     throw err;
   }
 }
@@ -116,158 +213,58 @@ export async function analyzeResume({ resumeText, jdText }) {
 /**
  * 追问 AI（对话模式）
  */
-export async function askAI(userQuestion, resumeText, jdText, analysisResult) {
-  // 添加用户问题到历史
-  chatHistory.push({ role: 'user', content: userQuestion });
+export async function askAI(question, resumeText, jdText, analysisResult) {
+  console.log('[AI Chat] 追问:', question.slice(0, 100));
 
-  console.log('[AI Chat] 追问:', userQuestion);
+  // 构建上下文：简历 + JD + 上次分析结果摘要
+  const contextPrompt = `## 背景信息
 
-  const prompt = buildChatPrompt(userQuestion, resumeText, jdText, analysisResult);
-
-  // 添加 system context 作为新的 user message
-  const fullPrompt = `你是一位资深AI产品经理兼求职顾问，正在帮助用户优化简历。
-
-当前简历和 JD 已提供，用户刚刚完成了一次分析。
-现在用户有以下问题，请结合之前的分析结果和简历内容作答：
-
-用户问题: "${userQuestion}"
-
----
-用户简历:
+用户简历：
 ${resumeText}
 
----
-岗位JD:
+岗位 JD：
 ${jdText}
 
----
-上次分析结果摘要:
-- 匹配度: ${analysisResult.overall_score}分
-- 匹配项: ${analysisResult.matched_items?.length || 0}项
-- 缺失项: ${analysisResult.missing_items?.length || 0}项
-- 改写建议: ${analysisResult.rewritten_sections?.length || 0}条
+上次分析结果摘要：
+- 总体匹配度：${analysisResult.overall_score}分
+- 匹配项：${(analysisResult.matched_items || []).length}项
+- 缺失项：${(analysisResult.missing_items || []).length}项
+- 改写建议：${(analysisResult.rewritten_sections || []).length}条
 
-请给出专业、具体、有深度的回答。`;
+## 用户的问题
+"${question}"
+
+请结合背景信息和简历原文，给出专业、具体的回答。`;
 
   try {
-    const result = await callMiniMaxAPIText(fullPrompt);
-    // 添加 AI 回答到历史
-    chatHistory.push({ role: 'assistant', content: result });
-    console.log('[AI Chat] AI 回答长度:', result.length, '字');
-    return result;
+    const { content, reasoning } = await callMiniMax(buildChatSystem(), contextPrompt);
+
+    // 添加到对话历史
+    chatMessages.push({ role: 'user', content: question });
+    chatMessages.push({ role: 'assistant', content });
+
+    console.log('[AI Chat] 回复成功, 长度:', content.length, '字');
+
+    // 如果有思考过程，可以选择显示
+    if (reasoning && reasoning.trim()) {
+      console.log('[AI Chat] 思考过程:', reasoning.slice(0, 200));
+    }
+
+    return content;
   } catch (err) {
-    console.error('[AI Chat] 追问失败:', err);
+    console.error('[AI Chat] 追问失败:', err.message);
     throw err;
   }
 }
 
 /**
- * 调用 MiniMax API（返回结构化 JSON）
- */
-async function callMiniMaxAPI(prompt, resumeText, jdText) {
-  const startTime = Date.now();
-
-  const response = await fetch(MINIMAX_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${MINIMAX_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'MiniMax-Text-01',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.3,
-      max_tokens: 4096,
-    }),
-  });
-
-  const latency = Date.now() - startTime;
-  console.log('[API] 响应时间:', latency + 'ms');
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('[API] HTTP 错误:', response.status, errorText);
-    throw new Error(`API 调用失败 (${response.status}): ${errorText}`);
-  }
-
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content || '';
-
-  console.log('[API] 原始回复长度:', content.length, '字');
-  console.log('[API] 回复前200字:', content.slice(0, 200));
-
-  // 解析 JSON
-  try {
-    const jsonMatch = content.match(/\{[\s\S]*?\}/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
-      // 确保所有必要字段存在
-      return {
-        overall_score: parsed.overall_score || 70,
-        dimension_scores: parsed.dimension_scores || mockAnalysisResult.dimension_scores,
-        matched_items: parsed.matched_items || [],
-        missing_items: parsed.missing_items || [],
-        rewritten_sections: parsed.rewritten_sections || [],
-        application_strategy: parsed.application_strategy || '建议根据缺失项优化后投递',
-      };
-    }
-  } catch (parseError) {
-    console.warn('[API] JSON 解析失败，尝试使用原始回复:', parseError.message);
-  }
-
-  // 解析失败，返回 mock + 原始回复
-  return {
-    ...mockAnalysisResult,
-    raw_ai_response: content,
-    overall_score: 72,
-    message: '⚠️ AI 返回格式异常，已显示原始回复',
-  };
-}
-
-/**
- * 调用 MiniMax API（返回纯文本，用于对话）
- */
-async function callMiniMaxAPIText(prompt) {
-  const startTime = Date.now();
-
-  const response = await fetch(MINIMAX_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${MINIMAX_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'MiniMax-Text-01',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.5,
-      max_tokens: 2048,
-    }),
-  });
-
-  const latency = Date.now() - startTime;
-  console.log('[Chat API] 响应时间:', latency + 'ms');
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`API 调用失败 (${response.status}): ${errorText}`);
-  }
-
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content || '';
-
-  if (!content.trim()) {
-    throw new Error('AI 回复为空，请稍后重试');
-  }
-
-  return content;
-}
-
-/**
- * 从各种格式文件中提取文本
+ * 从文件提取文本
  */
 export async function extractTextFromFile(file) {
   const fileName = file.name.toLowerCase();
   const fileType = file.type;
+
+  console.log('[extractTextFromFile] 文件:', fileName, '类型:', fileType);
 
   // 文本文件
   if (fileType === 'text/plain' || fileName.endsWith('.txt')) {
@@ -276,33 +273,32 @@ export async function extractTextFromFile(file) {
     return text;
   }
 
-  // PDF 文件
+  // PDF
   if (fileType === 'application/pdf' || fileName.endsWith('.pdf')) {
-    return await extractTextFromPDF(file);
+    return await extractPDF(file);
   }
 
-  // Word 文件
+  // Word
   if (
     fileType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
     fileName.endsWith('.docx')
   ) {
-    return await extractTextFromDOCX(file);
+    return await extractDOCX(file);
   }
 
-  // 图片文件（不是文本）
+  // 图片
   if (fileType.startsWith('image/') || /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(fileName)) {
-    throw new Error('图片文件请使用"JD 图片模式"上传，AI 会自动识别图片中的文字');
+    throw new Error('图片文件请使用"JD 图片模式"上传，AI 会自动识别');
   }
 
-  throw new Error(`不支持的文件格式: ${fileType || fileName}`);
+  throw new Error(`不支持的格式: ${fileType || fileName}。请上传 TXT、PDF 或 DOCX 文件。`);
 }
 
 /**
- * 从 PDF 提取文本（PDF.js CDN）
+ * PDF 提取（pdf.js CDN）
  */
-async function extractTextFromPDF(file) {
-  // 等待 PDF.js 加载
-  await ensurePDFJSLoaded();
+async function extractPDF(file) {
+  await ensureCDNLoaded('pdfjs');
 
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -316,84 +312,67 @@ async function extractTextFromPDF(file) {
   }
 
   if (!fullText.trim()) {
-    throw new Error('PDF 中未提取到文字（可能是扫描图片型 PDF）。请将 PDF 另存为文字型，或直接复制内容粘贴到文本框。');
+    throw new Error('PDF 中未提取到文字（可能是扫描图片型 PDF）。建议：(1) 将 PDF 另存为文字型 (2) 直接复制内容粘贴到文本框');
   }
 
+  console.log('[extractPDF] 提取成功:', fullText.length, '字');
   return fullText;
 }
 
 /**
- * 从 DOCX 提取文本（mammoth.js CDN）
+ * DOCX 提取（mammoth CDN）
  */
-async function extractTextFromDOCX(file) {
-  // 等待 mammoth.js 加载
-  await ensureMammothLoaded();
+async function extractDOCX(file) {
+  await ensureCDNLoaded('mammoth');
 
   const arrayBuffer = await file.arrayBuffer();
   const result = await window.mammoth.extractRawText({ arrayBuffer });
-  const text = result.value;
 
-  if (!text.trim()) {
-    throw new Error('Word 文档中未提取到文字。可能原因：(1) 文档是图片型 (2) 文档有密码保护。请直接复制文字内容粘贴到下方文本框。');
+  if (!result.value.trim()) {
+    throw new Error('Word 文档提取文字失败。可能原因：(1) 文档是图片型 (2) 有密码保护。请直接复制内容粘贴到文本框。');
   }
 
-  return text;
+  console.log('[extractDOCX] 提取成功:', result.value.length, '字');
+  return result.value;
 }
 
 /**
- * 确保 PDF.js CDN 已加载
+ * 懒加载 CDN 脚本
  */
-function ensurePDFJSLoaded() {
+const cdnLoaded = { pdfjs: false, mammoth: false };
+
+function ensureCDNLoaded(lib) {
+  if (cdnLoaded[lib]) return Promise.resolve();
+
   return new Promise((resolve, reject) => {
-    if (window.pdfjsLib) {
-      resolve();
-      return;
+    if (lib === 'pdfjs') {
+      if (window.pdfjsLib) { cdnLoaded.pdfjs = true; resolve(); return; }
+      const worker = document.createElement('script');
+      worker.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      worker.onerror = () => reject(new Error('PDF.js worker 加载失败'));
+      const main = document.createElement('script');
+      main.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+      main.onload = () => {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        cdnLoaded.pdfjs = true;
+        resolve();
+      };
+      main.onerror = () => reject(new Error('PDF.js 加载失败'));
+      document.head.appendChild(worker);
+      document.head.appendChild(main);
+    } else if (lib === 'mammoth') {
+      if (window.mammoth) { cdnLoaded.mammoth = true; resolve(); return; }
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.12.0/mammoth.browser.min.js';
+      script.onload = () => { cdnLoaded.mammoth = true; resolve(); };
+      script.onerror = () => reject(new Error('mammoth.js 加载失败，请检查网络'));
+      document.head.appendChild(script);
     }
-
-    const workerScript = document.createElement('script');
-    workerScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-    workerScript.onerror = () => reject(new Error('PDF.js worker 加载失败'));
-
-    const mainScript = document.createElement('script');
-    mainScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
-    mainScript.onload = () => {
-      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-      resolve();
-    };
-    mainScript.onerror = () => reject(new Error('PDF.js 主库加载失败'));
-
-    document.head.appendChild(workerScript);
-    document.head.appendChild(mainScript);
   });
 }
 
-/**
- * 确保 mammoth.js CDN 已加载
- */
-function ensureMammothLoaded() {
-  return new Promise((resolve, reject) => {
-    if (window.mammoth) {
-      resolve();
-      return;
-    }
-
-    const script = document.createElement('script');
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.12.0/mammoth.browser.min.js';
-    script.onload = resolve;
-    script.onerror = () => reject(new Error('mammoth.js 加载失败，请检查网络连接'));
-    document.head.appendChild(script);
-  });
-}
-
-/**
- * 检查是否是图片文件
- */
 export function isImageFile(file) {
-  const fileName = file.name.toLowerCase();
-  const fileType = file.type;
-  return (
-    fileType.startsWith('image/') ||
-    /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(fileName)
-  );
+  const t = file.type;
+  return t.startsWith('image/') || /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(file.name);
 }
