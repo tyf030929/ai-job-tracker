@@ -1,56 +1,96 @@
 import React from 'react';
-import { Card, CardContent } from '@/components/ui/card';
-import { cn } from '@/lib/utils';
-import { Briefcase, Code2, FolderOpen, Users } from 'lucide-react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
+import { Briefcase, Wrench, FolderOpen, Users } from 'lucide-react';
 
-const dimensionConfig = {
-  experience: { label: '工作经验', icon: Briefcase, color: 'text-blue-600 dark:text-blue-400' },
-  skills: { label: '技能要求', icon: Code2, color: 'text-purple-600 dark:text-purple-400' },
-  projects: { label: '项目经历', icon: FolderOpen, color: 'text-green-600 dark:text-green-400' },
-  soft_skills: { label: '软性要求', icon: Users, color: 'text-orange-600 dark:text-orange-400' },
-};
+const DimensionCards = ({ dimensions }) => {
+  // Default dimensions data
+  const defaultDimensions = [
+    {
+      name: '工作经验',
+      score: 85,
+      icon: Briefcase,
+      description: '工作年限和经历匹配度',
+      color: 'blue'
+    },
+    {
+      name: '技能要求',
+      score: 72,
+      icon: Wrench,
+      description: '技术技能与工具匹配度',
+      color: 'green'
+    },
+    {
+      name: '项目经历',
+      score: 68,
+      icon: FolderOpen,
+      description: '项目经验相关性',
+      color: 'purple'
+    },
+    {
+      name: '软技能',
+      score: 55,
+      icon: Users,
+      description: '沟通协作等软实力',
+      color: 'orange'
+    }
+  ];
 
-const getScoreColor = (score) => {
-  if (score >= 80) return 'text-green-600 dark:text-green-400';
-  if (score >= 60) return 'text-yellow-600 dark:text-yellow-400';
-  return 'text-red-600 dark:text-red-400';
-};
+  const items = dimensions || defaultDimensions;
 
-const getScoreBarColor = (score) => {
-  if (score >= 80) return 'bg-green-500';
-  if (score >= 60) return 'bg-yellow-500';
-  return 'bg-red-500';
-};
+  const colorMap = {
+    blue: { bg: 'bg-blue-100 dark:bg-blue-950', text: 'text-blue-600 dark:text-blue-400', progress: 'bg-blue-500' },
+    green: { bg: 'bg-green-100 dark:bg-green-950', text: 'text-green-600 dark:text-green-400', progress: 'bg-green-500' },
+    purple: { bg: 'bg-purple-100 dark:bg-purple-950', text: 'text-purple-600 dark:text-purple-400', progress: 'bg-purple-500' },
+    orange: { bg: 'bg-orange-100 dark:bg-orange-950', text: 'text-orange-600 dark:text-orange-400', progress: 'bg-orange-500' }
+  };
 
-export const DimensionCards = ({ dimensionScores }) => {
+  const getScoreLevel = (score) => {
+    if (score >= 80) return { label: '优秀', color: 'text-green-600' };
+    if (score >= 60) return { label: '良好', color: 'text-blue-600' };
+    if (score >= 40) return { label: '一般', color: 'text-yellow-600' };
+    return { label: '较弱', color: 'text-red-600' };
+  };
+
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-      {Object.entries(dimensionScores).map(([key, data]) => {
-        const config = dimensionConfig[key];
-        if (!config) return null;
-        const Icon = config.icon;
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      {items.map((dim, index) => {
+        const Icon = dim.icon;
+        const colors = colorMap[dim.color] || colorMap.blue;
+        const level = getScoreLevel(dim.score);
 
         return (
-          <Card key={key} className="dark:bg-gray-800 dark:border-gray-700">
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Icon className={cn("h-4 w-4", config.color)} />
-                <span className="text-sm font-medium dark:text-gray-200">{config.label}</span>
+          <Card key={index} className="overflow-hidden">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className={`p-2 rounded-lg ${colors.bg}`}>
+                    <Icon className={`w-4 h-4 ${colors.text}`} />
+                  </div>
+                  <CardTitle className="text-base font-medium">{dim.name}</CardTitle>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xl font-bold ${colors.text}`}>{dim.score}</span>
+                  <Badge variant="outline" className={level.color}>
+                    {level.label}
+                  </Badge>
+                </div>
               </div>
-              <div className="flex items-baseline gap-1 mb-2">
-                <span className={cn("text-2xl font-bold", getScoreColor(data.score))}>
-                  {data.score}
-                </span>
-                <span className="text-xs text-gray-400">/100</span>
-              </div>
-              {/* 进度条 */}
-              <div className="w-full h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full mb-2">
-                <div
-                  className={cn("h-full rounded-full transition-all duration-700", getScoreBarColor(data.score))}
-                  style={{ width: `${data.score}%` }}
+            </CardHeader>
+            <CardContent className="pb-4">
+              <p className="text-xs text-muted-foreground mb-3">{dim.description}</p>
+              <div className="space-y-1">
+                <Progress
+                  value={dim.score}
+                  className="h-2"
+                  indicatorClassName={colors.progress}
                 />
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>0</span>
+                  <span>100</span>
+                </div>
               </div>
-              <p className="text-xs text-gray-500 dark:text-gray-400 line-clamp-3">{data.analysis}</p>
             </CardContent>
           </Card>
         );
@@ -58,3 +98,5 @@ export const DimensionCards = ({ dimensionScores }) => {
     </div>
   );
 };
+
+export default DimensionCards;

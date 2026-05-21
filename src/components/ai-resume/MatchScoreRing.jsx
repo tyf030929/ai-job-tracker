@@ -1,53 +1,99 @@
 import React from 'react';
-import { cn } from '@/lib/utils';
+import { Card, CardContent } from '@/components/ui/card';
 
-const getScoreColor = (score) => {
-  if (score >= 90) return { stroke: '#22c55e', bg: 'bg-green-50 dark:bg-green-950', text: 'text-green-600 dark:text-green-400', label: '强烈推荐投递' };
-  if (score >= 75) return { stroke: '#3b82f6', bg: 'bg-blue-50 dark:bg-blue-950', text: 'text-blue-600 dark:text-blue-400', label: '建议投递' };
-  if (score >= 60) return { stroke: '#eab308', bg: 'bg-yellow-50 dark:bg-yellow-950', text: 'text-yellow-600 dark:text-yellow-400', label: '需要优化' };
-  return { stroke: '#ef4444', bg: 'bg-red-50 dark:bg-red-950', text: 'text-red-600 dark:text-red-400', label: '建议慎重' };
-};
-
-export const MatchScoreRing = ({ score }) => {
-  const { stroke, bg, text, label } = getScoreColor(score);
-  const circumference = 2 * Math.PI * 54;
+const MatchScoreRing = ({ score = 0, size = 180, strokeWidth = 12 }) => {
+  const radius = (size - strokeWidth) / 2;
+  const circumference = radius * 2 * Math.PI;
   const offset = circumference - (score / 100) * circumference;
 
+  // Color based on score
+  const getColor = (s) => {
+    if (s >= 80) return '#22c55e'; // green
+    if (s >= 60) return '#84cc16'; // lime
+    if (s >= 40) return '#eab308'; // yellow
+    if (s >= 20) return '#f97316'; // orange
+    return '#ef4444'; // red
+  };
+
+  const color = getColor(score);
+
+  const getLabel = (s) => {
+    if (s >= 80) return '高度匹配';
+    if (s >= 60) return '良好匹配';
+    if (s >= 40) return '中等匹配';
+    if (s >= 20) return '较低匹配';
+    return '匹配度低';
+  };
+
   return (
-    <div className={cn("flex flex-col items-center p-6 rounded-xl", bg)}>
-      <div className="relative w-32 h-32">
-        {/* 背景圆环 */}
-        <svg className="w-full h-full -rotate-90" viewBox="0 0 120 120">
+    <div className="flex flex-col items-center gap-2">
+      <div className="relative" style={{ width: size, height: size }}>
+        <svg
+          width={size}
+          height={size}
+          className="transform -rotate-90"
+        >
+          {/* Background circle */}
           <circle
-            cx="60"
-            cy="60"
-            r="54"
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
             fill="none"
             stroke="currentColor"
-            strokeWidth="8"
-            className="text-gray-200 dark:text-gray-700"
+            strokeWidth={strokeWidth}
+            className="text-gray-200 dark:text-gray-800"
           />
-          {/* 进度圆环 */}
+          {/* Progress circle */}
           <circle
-            cx="60"
-            cy="60"
-            r="54"
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
             fill="none"
-            stroke={stroke}
-            strokeWidth="8"
+            stroke={color}
+            strokeWidth={strokeWidth}
             strokeLinecap="round"
             strokeDasharray={circumference}
             strokeDashoffset={offset}
             className="transition-all duration-1000 ease-out"
           />
         </svg>
-        {/* 中心数字 */}
-        <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className={cn("text-3xl font-bold", text)}>{score}</span>
-          <span className="text-xs text-gray-500 dark:text-gray-400">/ 100</span>
+
+        {/* Center text */}
+        <div
+          className="absolute inset-0 flex flex-col items-center justify-center"
+          style={{ width: size, height: size }}
+        >
+          <span
+            className="text-4xl font-bold tabular-nums"
+            style={{ color }}
+          >
+            {score}
+          </span>
+          <span className="text-xs text-muted-foreground">分</span>
         </div>
       </div>
-      <p className={cn("mt-3 text-sm font-medium", text)}>{label}</p>
+
+      {/* Label */}
+      <span
+        className="text-sm font-medium px-3 py-1 rounded-full"
+        style={{
+          backgroundColor: `${color}20`,
+          color: color
+        }}
+      >
+        {getLabel(score)}
+      </span>
+
+      {/* Description */}
+      <p className="text-xs text-muted-foreground text-center max-w-[200px]">
+        {score >= 60
+          ? '您的简历与该职位有较好的匹配度，建议投递'
+          : score >= 40
+          ? '匹配度一般，建议针对 JD 优化简历后再投递'
+          : '匹配度较低，建议充分了解岗位要求后再尝试'}
+      </p>
     </div>
   );
 };
+
+export default MatchScoreRing;
