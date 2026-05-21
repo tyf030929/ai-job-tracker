@@ -5,7 +5,7 @@ import { JobKanban } from '@/components/kanban/JobKanban';
 import { CalendarView } from '@/components/calendar/CalendarView';
 import { StatsDashboard } from '@/components/stats/StatsDashboard';
 import AIResumeOptimizer from '@/pages/AIResumeOptimizer';
-import { KanbanSkeleton } from '@/components/kanban/KanbanSkeleton';
+import KanbanSkeleton from '@/components/kanban/KanbanSkeleton';
 import { Toaster } from '@/components/ui/sonner';
 import { toast } from 'sonner';
 
